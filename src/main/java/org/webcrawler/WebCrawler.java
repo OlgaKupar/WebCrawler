@@ -1,74 +1,108 @@
 package org.webcrawler;
 
-import org.jsoup.nodes.Document;
-
-import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
-import java.util.Queue;
 import java.util.Set;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
-/**
- * Class where actual crawling happens.
- * Visits pages using BFS - breadth first approach (level by level),
- * extracts headings and links, and returns a list of results for the report.
- * Stays within the allowed domain and stops at the configured depth.
- * Queue Class is essential for scheduling here.
- */
 public class WebCrawler {
 
-    private final UserInput userInput;
-    private final HTMLFetcher fetcher;
-    private final PageParser parser;
+    private static final int FETCH_TIMEOUT_SECONDS = 15;
 
-    public WebCrawler(UserInput userInput, HTMLFetcher fetcher, PageParser parser) {
+    private final UserInput userInput;
+    private final PageFetcher fetcher;
+    private final ContentParser parser;
+    private final ExecutorService executor;
+
+    public WebCrawler(UserInput userInput, PageFetcher fetcher, ContentParser parser, ExecutorService executor) {
         this.userInput = userInput;
         this.fetcher = fetcher;
         this.parser = parser;
+        this.executor = executor;
     }
 
     public List<ParsedPage> crawl() {
-        List<ParsedPage> results = new ArrayList<>();
+        List<ParsedPage> allResults = new ArrayList<>();
         Set<String> visited = new HashSet<>();
-        Queue<CrawlTask> queue = new ArrayDeque<>();
 
+        List<String> currentLevel = new ArrayList<>();
         String startUrl = UrlUtils.normalizeUrl(userInput.getStartUrl());
-        queue.add(new CrawlTask(startUrl, 0));
+        currentLevel.add(startUrl);
+        visited.add(startUrl);
 
-        while (!queue.isEmpty()) {
-            CrawlTask task = queue.poll();
-            String url = task.url();
-            int depth = task.depth();
-
-            if (visited.contains(url) || depth > userInput.getMaxDepth()) {
-                continue;
-            }
-            visited.add(url);
-
-            Document doc = fetcher.fetch(url);
-            if (doc == null) {
-                results.add(new ParsedPage(url, depth, true, List.of(), List.of()));
-                continue;
-            }
-
-            List<String> headings = parser.extractHeadings(doc);
-            List<String> links = parser.extractLinks(doc);
-
-            results.add(new ParsedPage(url, depth, false, headings, links));
-
-            for (String link : links) {
-                String normalized = UrlUtils.normalizeUrl(link);
-                if (!visited.contains(normalized)
-                        && UrlUtils.domainMatches(normalized, userInput.getDomain())) {
-                    queue.add(new CrawlTask(normalized, depth + 1));
-                }
-            }
+        for (int depth = 0; depth <= userInput.getMaxDepth() && !currentLevel.isEmpty(); depth++) {
+            List<ParsedPage> levelResults = processLevel(currentLevel, depth);
+            allResults.addAll(levelResults);
+            currentLevel = collectNextLevel(levelResults, visited);
         }
 
+        return allResults;
+    }
+
+    private List<ParsedPage> processLevel(List<String> urls, int depth) {
+        return collectResults(submitAll(urls, depth), urls, depth);
+    }
+
+    private List<Future<ParsedPage>> submitAll(List<String> urls, int depth) {
+        return urls.stream()
+                .map(url -> executor.submit(() -> processUrl(url, depth)))
+                .toList();
+    }
+
+    private List<ParsedPage> collectResults(List<Future<ParsedPage>> futures, List<String> urls, int depth) {
+        List<ParsedPage> results = new ArrayList<>();
+        for (int i = 0; i < futures.size(); i++) {
+            try {
+                results.add(futures.get(i).get(FETCH_TIMEOUT_SECONDS, TimeUnit.SECONDS));
+            } catch (TimeoutException e) {
+                futures.get(i).cancel(true);
+                results.add(ParsedPage.broken(urls.get(i), depth, "Timed out"));
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                for (int j = i; j < urls.size(); j++) {
+                    results.add(ParsedPage.broken(urls.get(j), depth, "Crawl interrupted"));
+                }
+                break;
+            } catch (ExecutionException e) {
+                results.add(ParsedPage.broken(urls.get(i), depth, "Task execution failed: " + e.getCause().getMessage()));
+            }
+        }
         return results;
     }
 
-    //Helper to hold a URL + its crawl depth in the queue
-    private record CrawlTask(String url, int depth) {}
+    private ParsedPage processUrl(String url, int depth) {
+        try {
+            FetchedPage fetched = fetcher.fetch(url);
+            List<String> headings = parser.extractHeadings(fetched);
+            List<String> links = parser.extractLinks(fetched);
+            return ParsedPage.successful(url, depth, headings, links);
+        } catch (PageFetchException e) {
+            return ParsedPage.broken(url, depth, e.getMessage());
+        } catch (RuntimeException e) {
+            return ParsedPage.broken(url, depth, "Unexpected error: " + e.getMessage());
+        }
+    }
+
+    private List<String> collectNextLevel(List<ParsedPage> levelResults, Set<String> visited) {
+        List<String> nextLevel = new ArrayList<>();
+        for (ParsedPage page : levelResults) {
+            if (page.isBroken()) continue;
+            for (String link : page.getLinks()) {
+                String normalized = UrlUtils.normalizeUrl(link);
+                if (matchesAllowedDomain(normalized) && visited.add(normalized)) {
+                    nextLevel.add(normalized);
+                }
+            }
+        }
+        return nextLevel;
+    }
+
+    private boolean matchesAllowedDomain(String url) {
+        return userInput.getDomains().stream().anyMatch(d -> UrlUtils.domainMatches(url, d));
+    }
 }

@@ -43,8 +43,12 @@ class UrlUtilsTest {
 
     @Test
     void normalizeUrl_keepsRootSlash() {
-        String result = UrlUtils.normalizeUrl("https://myTestWebSite/");
-        assertTrue(result.equals("https://myTestWebSite/") || result.equals("https://myTestWebSite"));
+        assertEquals("https://myTestWebSite/", UrlUtils.normalizeUrl("https://myTestWebSite/"));
+    }
+
+    @Test
+    void normalizeUrl_doesNotAddSlashToRootWithoutSlash() {
+        assertEquals("https://myTestWebSite", UrlUtils.normalizeUrl("https://myTestWebSite"));
     }
 
     @Test

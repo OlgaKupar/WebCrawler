@@ -1,5 +1,6 @@
 package org.webcrawler;
 
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -15,66 +16,85 @@ class MarkdownReportWriterTest {
     @TempDir
     Path tempDir;
 
+    private Path output;
+    private MarkdownReportWriter writer;
+
+    @BeforeEach
+    void setUp() {
+        output = tempDir.resolve("report.md");
+        writer = new MarkdownReportWriter();
+    }
+
+    private String writeAndRead(List<ParsedPage> pages) throws IOException {
+        writer.write(pages, output.toString());
+        return Files.readString(output);
+    }
+
     @Test
     void write_createsFileWithReportHeader() throws IOException {
-        Path output = tempDir.resolve("report.md");
-        new MarkdownReportWriter().write(List.of(), output.toString());
-        String content = Files.readString(output);
+        String content = writeAndRead(List.of());
         assertTrue(content.contains("# Web Crawler Report"));
     }
 
     @Test
-    void write_includesHeadingsAndUrl() throws IOException {
-        Path output = tempDir.resolve("report.md");
-        ParsedPage result = new ParsedPage(
-                "https://myTestWebSite.at", 0, false,
-                List.of("# Hello", "## World"),
-                List.of()
-        );
-        new MarkdownReportWriter().write(List.of(result), output.toString());
-        String content = Files.readString(output);
+    void write_includesPageUrl() throws IOException {
+        ParsedPage page = ParsedPage.successful("https://myTestWebSite.at", 0, List.of(), List.of());
+        String content = writeAndRead(List.of(page));
         assertTrue(content.contains("https://myTestWebSite.at"));
+    }
+
+    @Test
+    void write_includesExtractedHeadings() throws IOException {
+        ParsedPage page = ParsedPage.successful("https://myTestWebSite.at", 0, List.of("# Hello", "## World"), List.of());
+        String content = writeAndRead(List.of(page));
         assertTrue(content.contains("# Hello"));
         assertTrue(content.contains("## World"));
     }
 
     @Test
     void write_marksBrokenLinks() throws IOException {
-        Path output = tempDir.resolve("report.md");
-        ParsedPage broken = new ParsedPage(
-                "https://myTestWebSite.at/dead", 1, true, List.of(), List.of()
-        );
-        new MarkdownReportWriter().write(List.of(broken), output.toString());
-        String content = Files.readString(output);
+        ParsedPage broken = ParsedPage.broken("https://myTestWebSite.at/dead", 1, "HTTP 404");
+        String content = writeAndRead(List.of(broken));
         assertTrue(content.contains("broken link"));
         assertTrue(content.contains("https://myTestWebSite.at/dead"));
     }
 
     @Test
+    void write_includesErrorMessageForBrokenPage() throws IOException {
+        ParsedPage broken = ParsedPage.broken("https://myTestWebSite.at/gone", 0, "HTTP 410");
+        String content = writeAndRead(List.of(broken));
+        assertTrue(content.contains("HTTP 410"));
+    }
+
+    @Test
     void write_indentsChildPagesByDepth() throws IOException {
-        Path output = tempDir.resolve("report.md");
-        ParsedPage root  = new ParsedPage("https://myTestWebSite.at",       0, false, List.of(), List.of());
-        ParsedPage child = new ParsedPage("https://myTestWebSite.at/about", 1, false, List.of(), List.of());
-        new MarkdownReportWriter().write(List.of(root, child), output.toString());
+        ParsedPage root  = ParsedPage.successful("https://myTestWebSite.at",       0, List.of(), List.of());
+        ParsedPage child = ParsedPage.successful("https://myTestWebSite.at/about", 1, List.of(), List.of());
+        writer.write(List.of(root, child), output.toString());
 
         List<String> lines = Files.readAllLines(output);
         String rootLine  = lines.stream().filter(l -> l.contains("myTestWebSite.at") && !l.contains("about")).findFirst().orElse("");
         String childLine = lines.stream().filter(l -> l.contains("about")).findFirst().orElse("");
 
-        int rootIndent  = countLeadingSpaces(rootLine);
-        int childIndent = countLeadingSpaces(childLine);
-        assertTrue(childIndent > rootIndent);
+        assertTrue(countLeadingSpaces(childLine) > countLeadingSpaces(rootLine));
+    }
+
+    @Test
+    void write_emitsNewDepthHeaderWhenDepthOrderIsNonMonotonic() throws IOException {
+        ParsedPage depth0      = ParsedPage.successful("https://myTestWebSite.at",   0, List.of(), List.of());
+        ParsedPage depth1      = ParsedPage.successful("https://myTestWebSite.at/a", 1, List.of(), List.of());
+        ParsedPage depth0Again = ParsedPage.successful("https://myTestWebSite.at/b", 0, List.of(), List.of());
+        String content = writeAndRead(List.of(depth0, depth1, depth0Again));
+        assertTrue(content.contains("https://myTestWebSite.at/b"));
+        assertEquals(2, countOccurrences(content, "## Crawling at depth 0"));
     }
 
     @Test
     void write_printsDepthHeaderOncePerLevel() throws IOException {
-        Path output = tempDir.resolve("report.md");
-        ParsedPage pageA = new ParsedPage("https://myTestWebSite.at",        0, false, List.of(), List.of());
-        ParsedPage pageB = new ParsedPage("https://myTestWebSite.at/about",  1, false, List.of(), List.of());
-        ParsedPage pageC = new ParsedPage("https://myTestWebSite.at/contact",1, false, List.of(), List.of());
-        new MarkdownReportWriter().write(List.of(pageA, pageB, pageC), output.toString());
-
-        String content = Files.readString(output);
+        ParsedPage pageA = ParsedPage.successful("https://myTestWebSite.at",         0, List.of(), List.of());
+        ParsedPage pageB = ParsedPage.successful("https://myTestWebSite.at/about",   1, List.of(), List.of());
+        ParsedPage pageC = ParsedPage.successful("https://myTestWebSite.at/contact", 1, List.of(), List.of());
+        String content = writeAndRead(List.of(pageA, pageB, pageC));
         assertEquals(1, countOccurrences(content, "## Crawling at depth 0"));
         assertEquals(1, countOccurrences(content, "## Crawling at depth 1"));
     }

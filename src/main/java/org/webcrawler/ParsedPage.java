@@ -1,25 +1,33 @@
 package org.webcrawler;
 
 import java.util.List;
+import java.util.Optional;
 
-/**
- * Data Class to store the crawl result for a single web page — its URL, depth level,
- * whether it was reachable, and the headings and links extracted from it.
- */
 public class ParsedPage {
 
     private final String url;
     private final int depth;
     private final boolean broken;
+    private final String errorMessage;
     private final List<String> headings;
     private final List<String> links;
 
-    public ParsedPage(String url, int depth, boolean broken, List<String> headings, List<String> links) {
+    private ParsedPage(String url, int depth, boolean broken, String errorMessage,
+                       List<String> headings, List<String> links) {
         this.url = url;
         this.depth = depth;
         this.broken = broken;
+        this.errorMessage = errorMessage;
         this.headings = headings;
         this.links = links;
+    }
+
+    public static ParsedPage successful(String url, int depth, List<String> headings, List<String> links) {
+        return new ParsedPage(url, depth, false, null, headings, links);
+    }
+
+    public static ParsedPage broken(String url, int depth, String errorMessage) {
+        return new ParsedPage(url, depth, true, errorMessage, List.of(), List.of());
     }
 
     public String getUrl() {
@@ -32,6 +40,11 @@ public class ParsedPage {
 
     public boolean isBroken() {
         return broken;
+    }
+
+    /** Returns the fetch error message, or empty if the page was successfully crawled. */
+    public Optional<String> getErrorMessage() {
+        return Optional.ofNullable(errorMessage);
     }
 
     public List<String> getHeadings() {

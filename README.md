@@ -1,60 +1,39 @@
 # WebCrawler
 
-A simple web crawler written in Java that visits a website and its linked pages, extracts headings and links, and generates a compact Markdown report.
+Crawls websites breadth-first and writes a Markdown report. Broken links show up in the
+report with the error message.
 
----
+## Requirements
 
-## What it does
-
-Starting from a given URL, the crawler visits pages level by level (BFS), stays within the specified domain, and stops at the configured depth. For each page it records all headings (h1–h6) and links found. Broken links (unreachable pages or HTTP 4xx/5xx errors) are marked in the report and also printed to the console so you can spot them immediately.
-
----
-
-## Classes
-
-| Class | Role |
-|---|---|
-| `Main` | Entry point, reads and validates CLI arguments |
-| `UserInput` | Holds the three input parameters: URL, depth, domain |
-| `WebCrawler` | Core crawl loop — BFS traversal, tracks visited pages |
-| `HTMLFetcher` | Fetches a page using jsoup, checks HTTP status |
-| `PageParser` | Extracts headings and links from a fetched document |
-| `UrlUtils` | URL normalization and domain matching helpers |
-| `ParsedPage` | Data class — stores result for one crawled page |
-| `MarkdownReportWriter` | Writes the final report.md file |
-
----
+- Java 21+
+- Maven 3.8+
 
 ## Build
 
-Requires Java 21+ and Maven.
-
 ```bash
-mvn package
+mvn package -DskipTests
 ```
 
-This compiles the code, runs all tests, and produces `target/webcrawler.jar`.
-
----
+JAR is at `target/webcrawler.jar`.
 
 ## Run
 
 ```bash
-java -jar target/webcrawler.jar <url> <depth> <domain>
+java -jar target/webcrawler.jar <url> <depth> <domain> [domain2 ...]
 ```
 
-**Example:**
+| Argument  | Description                                       |
+|-----------|---------------------------------------------------|
+| `url`     | Start URL (e.g. `https://example.com`)            |
+| `depth`   | How deep to crawl (0 = start page only)           |
+| `domain`  | At least one allowed domain (e.g. `example.com`)  |
+| `domain2` | More allowed domains (optional)                   |
+
 ```bash
-java -jar target/webcrawler.jar https://proagent-software.at 2 proagent-software.at
+java -jar target/webcrawler.jar https://example.com 2 example.com
 ```
 
-- `url` — the starting page
-- `depth` — how many link levels deep to crawl (0 = start page only)
-- `domain` — only pages on this domain (and subdomains) will be followed
-
-The report is saved as `report.md` in the current directory.
-
----
+Report is written to `report.md` in the current directory.
 
 ## Test
 
@@ -62,30 +41,75 @@ The report is saved as `report.md` in the current directory.
 mvn test
 ```
 
-Runs all 30 unit tests covering crawl logic, HTML parsing, URL utilities, report writing, and HTTP status detection.
+## Design
 
----
+### Boundaries
 
-## Example report output
+We use jsoup for HTTP requests and HTML parsing. To avoid jsoup calls spreading across
+the whole codebase, all jsoup code is limited to two classes: `JsoupPageFetcher` and
+`JsoupContentParser`. Everything else only uses our own interfaces (`PageFetcher`,
+`ContentParser`, `ReportWriter`). If we ever switch away from jsoup, only those two
+files need to change.
 
-```markdown
-# Web Crawler Report
-_Generated: 2026-04-28 14:00:00_
+### Single Responsibility
 
-## Crawling at depth 0
+Each class has one job:
 
-- **https://proagent-software.at**
-  # Welcome
-  ## Our Services
-  Links:
-    - https://proagent-software.at/about
-    - https://proagent-software.at/contact
+- `JsoupPageFetcher` — HTTP request only
+- `JsoupContentParser` — extract headings and links from HTML
+- `WebCrawler` — BFS crawl loop
+- `MarkdownReportWriter` — write the report
+- `Main` — wire everything together and start
 
-## Crawling at depth 1
+`WebCrawler` is a compromise. It handles BFS, domain filtering, and concurrency in one
+class, which is more than one responsibility. Splitting it into separate classes would
+add complexity without much benefit at this size, so we kept it together. At least at
+the method level each method does one thing: `submitAll` sends URLs to the thread pool,
+`collectResults` waits for the results and handles errors.
 
-  - **https://proagent-software.at/about**
-    ## About Us
-  
-  - **broken link** https://proagent-software.at/contact
+### Error Handling
+
+When a page fails (404, timeout, network error), `JsoupPageFetcher` throws a
+`PageFetchException`. This keeps jsoup exceptions out of the rest of the code.
+`WebCrawler` catches it and stores the message in `ParsedPage.broken(...)`. The report
+shows it like this:
+
+```
+- **broken link** https://example.com/missing → HTTP 404
 ```
 
+`ParsedPage` uses factory methods (`successful(...)` / `broken(...)`) instead of a
+plain constructor so it is obvious which kind of result you are creating.
+
+### Concurrency
+
+All URLs at the same depth level are fetched in parallel. The main thread waits for all
+of them before moving to the next level.
+
+```
+depth 0:  [url-A]               → parallel fetch → done
+depth 1:  [url-B, url-C, url-D] → parallel fetch → done
+depth 2:  [url-E, url-F]        → parallel fetch → done
+```
+
+Threads do not share data — each one works on a single URL and returns a `ParsedPage`.
+The visited-URL set is only touched by the main thread between levels, so no
+`synchronized` is needed. The `ExecutorService` is created in `Main` and injected into
+`WebCrawler`, which makes it easy to use a single-thread executor in tests.
+
+### Class overview
+
+| Class | Role |
+|-------|------|
+| `PageFetcher` | Interface: fetch a page |
+| `ContentParser` | Interface: extract headings and links |
+| `ReportWriter` | Interface: write the report |
+| `JsoupPageFetcher` | `PageFetcher` using jsoup |
+| `JsoupContentParser` | `ContentParser` using jsoup |
+| `PageFetchException` | Wraps all fetch errors |
+| `FetchedPage` | Raw page data, no jsoup types |
+| `ParsedPage` | One crawled URL: headings, links, optional error |
+| `WebCrawler` | BFS crawl loop with concurrency |
+| `MarkdownReportWriter` | Writes `Report.md` |
+| `UrlUtils` | URL helpers (normalize, domain check) |
+| `Main` | Entry point, wires everything together |

@@ -7,26 +7,19 @@ public class UrlUtils {
 
     private UrlUtils() {}
 
-    /**
-     * Returns true if the host of the given URL matches the allowed domain.
-     * Strips leading "www." before comparing so that "www.example.com"
-     * and "example.com" are treated as the same domain.
-     */
-    public static boolean domainMatches(String inputUrl, String inputDomain) {
-        String host = extractHost(inputUrl);
+    // Strips "www." so that www.example.com and example.com are treated the same.
+    public static boolean domainMatches(String url, String domain) {
+        String host = extractHost(url);
         if (host == null) return false;
         String normalizedHost = stripWww(host.toLowerCase());
-        String normalizedDomain = stripWww(inputDomain.toLowerCase());
+        String normalizedDomain = stripWww(domain.toLowerCase());
         return normalizedHost.equals(normalizedDomain) || normalizedHost.endsWith("." + normalizedDomain);
     }
 
-    /**
-     * Strips trailing slashes and fragments so that the same page is not
-     * crawled twice under two different URL strings.
-     */
-    public static String normalizeUrl(String inputUrl) {
+    // Strips trailing slashes and fragments to prevent crawling the same page twice.
+    public static String normalizeUrl(String url) {
         try {
-            URI uri = new URI(inputUrl).normalize();
+            URI uri = new URI(url).normalize();
             URI withoutFragment = new URI(
                     uri.getScheme(),
                     uri.getAuthority(),
@@ -41,7 +34,7 @@ public class UrlUtils {
             }
             return result;
         } catch (URISyntaxException e) {
-            return inputUrl;
+            return url;
         }
     }
 

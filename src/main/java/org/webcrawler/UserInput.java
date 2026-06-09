@@ -1,20 +1,18 @@
 package org.webcrawler;
 
-/**
- * Data Class, holding parameters used to configure webcrawler.
- * Input source - console.
- * Example: https://myWebSite.at 3 myWebSite.at
- */
+import java.util.List;
+
+// <url> <depth> <domain> [domain2 ...]
 public class UserInput {
 
     private final String startUrl;
     private final int maxDepth;
-    private final String domain;
+    private final List<String> domains;
 
-    public UserInput(String startUrl, int maxDepth, String domain) {
+    public UserInput(String startUrl, int maxDepth, List<String> domains) {
         this.startUrl = startUrl;
         this.maxDepth = maxDepth;
-        this.domain = domain;
+        this.domains = domains;
     }
 
     public String getStartUrl() {
@@ -25,7 +23,7 @@ public class UserInput {
         return maxDepth;
     }
 
-    public String getDomain() {
-        return domain;
+    public List<String> getDomains() {
+        return domains;
     }
 }
